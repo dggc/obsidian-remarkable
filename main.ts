@@ -15,6 +15,7 @@ interface MyPluginSettings {
     outputPath: string;
     rmAddress: string;
     postprocessor: string;
+    openAIKey: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -22,7 +23,8 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
     invertRemarkableImages: true,
     outputPath: '.',
     rmAddress: '10.11.99.1',
-    postprocessor: ''
+    postprocessor: '',
+    openAIKey: ''
 }
 
 function mkCheckCallback(innerFn: () => any): (checking: boolean) => boolean {
@@ -150,6 +152,64 @@ export default class MyPlugin extends Plugin {
         return true;
     }
 
+  async readImageAsBase64(filePath: string): Promise<string> {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof File)) throw new Error('File not found!');
+
+    const arrayBuffer = await this.app.vault.readBinary(file);
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    return base64;
+  }
+
+  async sendToOpenAI(imageBase64: string): Promise<any> {
+    const { openAIKey } = this.settings;
+    const endpoint = 'https://api.openai.com/v1/chat/completions';
+    const prompt = "Convert this image to markdown text";
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIKey}`,
+      },
+      body: JSON.stringify({
+        messages: [
+        {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: prompt
+          },
+          {
+            type: "image_url",
+          image_url: {
+            url: `data:image/jpeg;base64,${imageBase64}`
+          }
+          }
+        ],
+        model: 'gpt-4o',
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data;
+  }
+
+    async openAIOCR(drawingFilePath: string) {
+        const { openAIKey } = this.settings;
+        if (openAIKey) {
+            const args = [drawingFilePath];
+            const { stderr, stdout } = await this.runProcess(postprocessor, args);
+		return stdout;
+        }
+        return '';
+    }
+
     async tryInsertingDrawing(landscape: boolean) {
         let success = false;
         new Notice('Inserting rM drawing...', 1000);
@@ -160,8 +220,9 @@ export default class MyPlugin extends Plugin {
 	    const editor = this.editor;
             const { drawingFilePath, drawingFileName } = await this.callReSnap(landscape);
             await this.postprocessDrawing(drawingFilePath); // no-op if no postprocessor set
+	    const ocr = await this.openAIOCR(drawingFilePath); // no-op if no openAIKey set
 
-            editor.replaceRange(`![[${drawingFileName}]]`, editor.getCursor());
+            editor.replaceRange(`![[${drawingFileName}]]\n{$ocr}`, editor.getCursor());
             new Notice('Inserted your rM drawing!');
             return true;
         } catch(error) {
