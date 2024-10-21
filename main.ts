@@ -152,61 +152,73 @@ export default class MyPlugin extends Plugin {
         return true;
     }
 
-  async readImageAsBase64(filePath: string): Promise<string> {
-    const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof File)) throw new Error('File not found!');
-
-    const arrayBuffer = await this.app.vault.readBinary(file);
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
-    return base64;
-  }
-
-  async sendToOpenAI(imageBase64: string): Promise<any> {
-    const { openAIKey } = this.settings;
-    const endpoint = 'https://api.openai.com/v1/chat/completions';
-    const prompt = "Convert this image to markdown text";
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIKey}`,
-      },
-      body: JSON.stringify({
-        messages: [
-        {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: prompt
-          },
-          {
-            type: "image_url",
-          image_url: {
-            url: `data:image/jpeg;base64,${imageBase64}`
-          }
-          }
-        ],
-        model: 'gpt-4o',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`API request failed: ${response.statusText}`);
+    /**
+     * Converts various types of objects into base64 encoded strings.
+     * @param input - The input object to be encoded (image, URL, file reference, etc.)
+     * @returns A Promise that resolves to the base64 encoded string
+     */
+    async toBase64(
+        input: string
+    ): Promise<string> {
+        // console.log(input);
+        const filePath = `${this.settings.outputPath}/${input}`
+        // console.log(filePath);
+        const file = this.app.vault.getFileByPath(filePath);
+        // console.log(file);
+        const arrayBuffer = await this.app.vault.readBinary(file);
+        // console.log(arrayBuffer);
+        const imageBuffer = Buffer.from(arrayBuffer);
+        // console.log(imageBuffer);
+        
+        // Convert PNG buffer to base64
+        return imageBuffer.toString('base64');
     }
 
-    const data = await response.json();
-    return data;
-  }
+    async sendToOpenAI(imageBase64: string): Promise<any> {
+        const { openAIKey } = this.settings;
+        const endpoint = 'https://api.openai.com/v1/chat/completions';
+        const prompt = "Converta o texto da imagem para markdown. Corrija erros de Português e Inglês. Não inclua o marcador de bloco ```.";
 
-    async openAIOCR(drawingFilePath: string) {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${openAIKey}`,
+            },
+            body: JSON.stringify({
+                messages: [{
+                    role: "user",
+                    content: [{
+                        type: "text",
+                        text: prompt
+                    }, {
+                        type: "image_url",
+                        image_url: {
+                            url: `data:image/jpeg;base64,${imageBase64}`
+                        }
+                    }],
+                }],
+                model: 'gpt-4o'
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`API request failed: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data;
+    }
+
+    async openAIOCR(drawingFileName: string) {
         const { openAIKey } = this.settings;
         if (openAIKey) {
-            const args = [drawingFilePath];
-            const { stderr, stdout } = await this.runProcess(postprocessor, args);
-		return stdout;
+            const imageBase64 = await this.toBase64(drawingFileName);
+            // console.log(imageBase64);
+            const data = await this.sendToOpenAI(imageBase64);
+		    return data.choices[0].message.content;
         }
+        new Notice('No OpenAI Key');
         return '';
     }
 
@@ -220,9 +232,9 @@ export default class MyPlugin extends Plugin {
 	    const editor = this.editor;
             const { drawingFilePath, drawingFileName } = await this.callReSnap(landscape);
             await this.postprocessDrawing(drawingFilePath); // no-op if no postprocessor set
-	    const ocr = await this.openAIOCR(drawingFilePath); // no-op if no openAIKey set
+	        const ocr = await this.openAIOCR(drawingFileName); // no-op if no openAIKey set
 
-            editor.replaceRange(`![[${drawingFileName}]]\n{$ocr}`, editor.getCursor());
+            editor.replaceRange(`![[${drawingFileName}]]\n### OCR\n${ocr}`, editor.getCursor());
             new Notice('Inserted your rM drawing!');
             return true;
         } catch(error) {
@@ -341,6 +353,16 @@ class SampleSettingTab extends PluginSettingTab {
                     this.outputPathError.style.display = "none";
                     this.outputPathSuccess.style.display = "block";
                 }
+            }));
+        new Setting(containerEl)
+            .setName('OpenAI API Key')
+            .setDesc('The OpenAI API Key')
+            .addText(text => text
+            .setPlaceholder('your key')
+            .setValue(this.plugin.settings.openAIKey)
+            .onChange(async (value) => {
+                this.plugin.settings.openAIKey = value;
+                await this.plugin.saveSettings();
             }));
         this.outputPathInfo = containerEl.createEl('p', {
             cls: 'remarkable-output-path-info d-none',
