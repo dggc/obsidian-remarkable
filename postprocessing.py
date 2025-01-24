@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import sys
 
 from PIL import Image, ImageOps
@@ -8,6 +7,7 @@ import numpy as np
 if __name__ == '__main__':
     assert len(sys.argv) == 2, "Image path must be passed!"
     path = sys.argv[1]
+    print(path)
 
     # load image, discard alpha (if present)
     img = Image.open(path).convert("RGB")
